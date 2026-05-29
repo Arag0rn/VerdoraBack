@@ -9,7 +9,12 @@ const authRoutes = require('./routes/auth');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
-const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'http://localhost:5173';
+
+// FRONTEND_ORIGIN may be a comma-separated list of allowed origins.
+const allowedOrigins = (process.env.FRONTEND_ORIGIN || 'http://localhost:5173')
+  .split(',')
+  .map(o => o.trim())
+  .filter(Boolean);
 
 // Behind Render/Heroku-style proxies so secure cookies and req.secure work.
 app.set('trust proxy', 1);
@@ -18,7 +23,11 @@ app.use(express.json());
 app.use(cookieParser());
 app.use(
   cors({
-    origin: FRONTEND_ORIGIN,
+    origin(origin, callback) {
+      // Allow non-browser clients (no Origin header) and whitelisted origins.
+      if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error(`Origin ${origin} not allowed by CORS`));
+    },
     credentials: true,
   })
 );
