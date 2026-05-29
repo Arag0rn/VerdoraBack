@@ -48,7 +48,7 @@ This backend runs as a normal long-lived Node process (no code changes needed).
 
 1. Create a new **Web Service** on Render pointed at this repo.
 2. Settings:
-   - **Root Directory:** `backend`
+   - **Root Directory:** *(leave empty — the app is at the repo root)*
    - **Build Command:** `npm install`
    - **Start Command:** `npm start`
 3. Environment variables (Render dashboard):
