@@ -25,8 +25,10 @@ app.use(
   cors({
     origin(origin, callback) {
       // Allow non-browser clients (no Origin header) and whitelisted origins.
+      // Reject disallowed origins cleanly (no CORS headers) instead of throwing,
+      // which would otherwise surface as a 500 on the preflight request.
       if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
-      return callback(new Error(`Origin ${origin} not allowed by CORS`));
+      return callback(null, false);
     },
     credentials: true,
   })
