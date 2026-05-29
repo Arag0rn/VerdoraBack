@@ -1,0 +1,23 @@
+# Dependencies
+node_modules
+
+# Env / secrets
+.env
+*.local
+
+# TLS certificates / private keys (never commit secrets)
+certs/
+*.key
+*.crt
+*.pem
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+.idea
+.vscode/*
+!.vscode/extensions.json
