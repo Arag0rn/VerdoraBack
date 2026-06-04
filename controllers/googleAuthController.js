@@ -30,8 +30,9 @@ async function googleCallback(req, res) {
 
     // Store refresh token in database
     await RefreshToken.create({
-      tokenId: refreshTokenValue,
+      token: refreshTokenValue,
       userId: user._id,
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
     });
 
     // Set cookies
