@@ -15,24 +15,31 @@ const inflightCodes = new Map();
 const CODE_TTL_MS = 60 * 1000;
 
 /**
- * Where to send the browser after the OAuth dance. Must be a single absolute
- * URL with a protocol — redirecting to an undefined/relative/multi-value string
- * yields ERR_INVALID_REDIRECT in the browser.
- *
- * FRONTEND_ORIGIN may hold a comma-separated list (it doubles as the CORS
- * allow-list), so we split it, keep only valid http(s) origins, and prefer an
- * https one (the deployed frontend) over http localhost.
+ * Allowed frontend origins. FRONTEND_ORIGIN is a comma-separated list (it
+ * doubles as the CORS allow-list), e.g. "http://localhost:5173,https://app.example".
  */
-function frontendOrigin() {
-  const candidates = (process.env.FRONTEND_ORIGIN || '')
+function allowedOrigins() {
+  return (process.env.FRONTEND_ORIGIN || '')
     .split(',')
     .map(o => o.trim().replace(/\/$/, ''))
     .filter(o => /^https?:\/\//.test(o));
+}
 
-  const chosen =
-    candidates.find(o => o.startsWith('https://')) || candidates[0];
+/**
+ * Pick where to send the browser back to. The backend can't guess whether the
+ * flow started from localhost or production, so the initiator's origin is
+ * carried through `state` and validated here against the allow-list (prevents
+ * open-redirect). Falls back to the first allowed origin, then localhost.
+ *
+ * Must be a single absolute URL — an undefined/relative/multi-value value
+ * yields ERR_INVALID_REDIRECT in the browser.
+ */
+function resolveOrigin(requested) {
+  const allowed = allowedOrigins();
+  const normalized = (requested || '').trim().replace(/\/$/, '');
 
-  if (chosen) return chosen;
+  if (normalized && allowed.includes(normalized)) return normalized;
+  if (allowed.length) return allowed[0];
 
   console.warn(
     'FRONTEND_ORIGIN is missing or invalid; falling back to http://localhost:5173'
@@ -46,7 +53,20 @@ function frontendOrigin() {
 async function googleAuth(req, res) {
   const redirectUri = `${process.env.BASE_URL}/auth/google/callback`;
   console.log('Google Auth - Redirect URI:', redirectUri);
-  
+
+  // Where to return the user after login. Prefer an explicit ?origin= from the
+  // frontend, fall back to the Referer's origin. Validated in the callback.
+  let requestedOrigin = req.query.origin;
+  if (!requestedOrigin && req.get('referer')) {
+    try {
+      requestedOrigin = new URL(req.get('referer')).origin;
+    } catch {
+      /* ignore malformed referer */
+    }
+  }
+  const state = resolveOrigin(requestedOrigin);
+  console.log('Google Auth - Return origin:', state);
+
   const params = new URLSearchParams({
     client_id: process.env.GOOGLE_CLIENT_ID,
     redirect_uri: redirectUri,
@@ -57,6 +77,7 @@ async function googleAuth(req, res) {
     response_type: 'code',
     access_type: 'offline',
     prompt: 'consent',
+    state,
   });
 
   return res.redirect(
@@ -141,14 +162,18 @@ function exchangeAndIssue(code, redirectUri) {
  * Google OAuth callback handler
  */
 async function googleCallback(req, res) {
+  const fullUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
+  const urlParams = new URLSearchParams(new URL(fullUrl).search);
+
+  // `state` carries the initiator's origin (set in googleAuth); validate it
+  // against the allow-list so we return the user to where they started.
+  const returnOrigin = resolveOrigin(urlParams.get('state'));
+
   try {
-    const fullUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
-    const urlObj = new URL(fullUrl);
-    const urlParams = new URLSearchParams(urlObj.search);
     const code = urlParams.get('code');
 
     if (!code) {
-      return res.redirect(`${frontendOrigin()}?error=no_code`);
+      return res.redirect(`${returnOrigin}?error=no_code`);
     }
 
     const redirectUri = `${process.env.BASE_URL}/auth/google/callback`;
@@ -176,7 +201,7 @@ async function googleCallback(req, res) {
     });
 
     // Redirect to frontend
-    res.redirect(frontendOrigin());
+    res.redirect(returnOrigin);
   } catch (err) {
     console.error('Google OAuth callback error:', err.message);
     if (err.response) {
@@ -185,7 +210,7 @@ async function googleCallback(req, res) {
         data: err.response.data,
       });
     }
-    res.redirect(`${frontendOrigin()}?error=server_error`);
+    res.redirect(`${returnOrigin}?error=server_error`);
   }
 }
 
