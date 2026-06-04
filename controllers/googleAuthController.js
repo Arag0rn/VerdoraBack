@@ -26,19 +26,33 @@ function allowedOrigins() {
 }
 
 /**
- * Pick where to send the browser back to. The backend can't guess whether the
- * flow started from localhost or production, so the initiator's origin is
- * carried through `state` and validated here against the allow-list (prevents
- * open-redirect). Falls back to the first allowed origin, then localhost.
+ * Resolve where to send the browser back to. The backend can't guess whether
+ * the flow started from localhost or production, so the frontend passes its
+ * full return URL (origin + mount path, e.g. http://localhost:5173/Front-end-Verdora/)
+ * which is carried through `state`.
  *
- * Must be a single absolute URL — an undefined/relative/multi-value value
+ * Security: only the URL's *origin* is validated against the allow-list
+ * (prevents open-redirect); the path is preserved so we land where the SPA is
+ * actually mounted. Falls back to the first allowed origin, then localhost.
+ *
+ * Returns a single absolute URL — an undefined/relative/multi-value value
  * yields ERR_INVALID_REDIRECT in the browser.
  */
-function resolveOrigin(requested) {
+function resolveReturnUrl(requested) {
   const allowed = allowedOrigins();
-  const normalized = (requested || '').trim().replace(/\/$/, '');
 
-  if (normalized && allowed.includes(normalized)) return normalized;
+  if (requested) {
+    try {
+      const url = new URL(requested);
+      if (allowed.includes(url.origin)) {
+        // origin + path only; drop any query/hash the caller tacked on
+        return url.origin + url.pathname;
+      }
+    } catch {
+      /* not a valid absolute URL — fall through to defaults */
+    }
+  }
+
   if (allowed.length) return allowed[0];
 
   console.warn(
@@ -54,18 +68,12 @@ async function googleAuth(req, res) {
   const redirectUri = `${process.env.BASE_URL}/auth/google/callback`;
   console.log('Google Auth - Redirect URI:', redirectUri);
 
-  // Where to return the user after login. Prefer an explicit ?origin= from the
-  // frontend, fall back to the Referer's origin. Validated in the callback.
-  let requestedOrigin = req.query.origin;
-  if (!requestedOrigin && req.get('referer')) {
-    try {
-      requestedOrigin = new URL(req.get('referer')).origin;
-    } catch {
-      /* ignore malformed referer */
-    }
-  }
-  const state = resolveOrigin(requestedOrigin);
-  console.log('Google Auth - Return origin:', state);
+  // Where to return the user after login. Prefer an explicit ?return_to= from
+  // the frontend (full URL incl. mount path), fall back to the Referer.
+  // Validated against the allow-list in resolveReturnUrl.
+  const requested = req.query.return_to || req.get('referer');
+  const state = resolveReturnUrl(requested);
+  console.log('Google Auth - Return URL:', state);
 
   const params = new URLSearchParams({
     client_id: process.env.GOOGLE_CLIENT_ID,
@@ -165,9 +173,9 @@ async function googleCallback(req, res) {
   const fullUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
   const urlParams = new URLSearchParams(new URL(fullUrl).search);
 
-  // `state` carries the initiator's origin (set in googleAuth); validate it
-  // against the allow-list so we return the user to where they started.
-  const returnOrigin = resolveOrigin(urlParams.get('state'));
+  // `state` carries the initiator's return URL (set in googleAuth); its origin
+  // is validated against the allow-list so we land where the user started.
+  const returnOrigin = resolveReturnUrl(urlParams.get('state'));
 
   try {
     const code = urlParams.get('code');
