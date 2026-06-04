@@ -6,6 +6,7 @@ const fs = require('fs');
 const https = require('https');
 const db = require('./db');
 const authRoutes = require('./routes/auth');
+const passport = require('./config/passport');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -33,6 +34,9 @@ app.use(
     credentials: true,
   })
 );
+
+// Initialize passport
+app.use(passport.initialize());
 
 app.use('/', authRoutes);
 
