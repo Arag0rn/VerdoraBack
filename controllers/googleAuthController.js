@@ -8,9 +8,12 @@ const RefreshToken = require('../models/RefreshToken');
  * Initiate Google OAuth flow
  */
 async function googleAuth(req, res) {
+  const redirectUri = `${process.env.BASE_URL}/auth/google/callback`;
+  console.log('Google Auth - Redirect URI:', redirectUri);
+  
   const params = new URLSearchParams({
     client_id: process.env.GOOGLE_CLIENT_ID,
-    redirect_uri: `${process.env.BASE_URL}/auth/google/callback`,
+    redirect_uri: redirectUri,
     scope: [
       'https://www.googleapis.com/auth/userinfo.email',
       'https://www.googleapis.com/auth/userinfo.profile',
@@ -39,24 +42,18 @@ async function googleCallback(req, res) {
       return res.redirect(`${process.env.FRONTEND_ORIGIN}?error=no_code`);
     }
 
+    const redirectUri = `${process.env.BASE_URL}/auth/google/callback`;
+    console.log('Google Callback - Redirect URI:', redirectUri);
+    console.log('Google Callback - Code:', code.substring(0, 20) + '...');
+
     // Exchange code for token
-    const tokenParams = new URLSearchParams({
+    const tokenData = await axios.post(`https://oauth2.googleapis.com/token`, {
       client_id: process.env.GOOGLE_CLIENT_ID,
       client_secret: process.env.GOOGLE_CLIENT_SECRET,
-      redirect_uri: `${process.env.BASE_URL}/auth/google/callback`,
+      redirect_uri: redirectUri,
       grant_type: 'authorization_code',
       code,
     });
-
-    const tokenData = await axios.post(
-      `https://oauth2.googleapis.com/token`,
-      tokenParams.toString(),
-      {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-      }
-    );
 
     const accessToken = tokenData.data.access_token;
 
@@ -121,7 +118,13 @@ async function googleCallback(req, res) {
     // Redirect to frontend
     res.redirect(process.env.FRONTEND_ORIGIN);
   } catch (err) {
-    console.error('Google OAuth callback error:', err);
+    console.error('Google OAuth callback error:', err.message);
+    if (err.response) {
+      console.error('Google API Error Response:', {
+        status: err.response.status,
+        data: err.response.data,
+      });
+    }
     res.redirect(`${process.env.FRONTEND_ORIGIN}?error=server_error`);
   }
 }
