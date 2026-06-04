@@ -1,6 +1,6 @@
 const axios = require('axios');
-const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
+const { signAccessToken } = require('../utils/jwt');
 const User = require('../models/User');
 const RefreshToken = require('../models/RefreshToken');
 
@@ -137,28 +137,19 @@ function exchangeAndIssue(code, redirectUri) {
       });
     }
 
-    // Generate JWT tokens
-    const jwtAccessToken = jwt.sign(
-      { userId: user._id, email: user.email },
-      process.env.JWT_ACCESS_SECRET,
-      { expiresIn: '15m' }
-    );
+    // Issue tokens in the SAME format as the regular auth flow so that
+    // /users/current-user (reads `sub`) and /auth/refresh (looks up the raw
+    // uuid in the DB) both work. Access = JWT { sub }, refresh = raw uuid.
+    const jwtAccessToken = signAccessToken({ sub: String(user._id) });
 
     const refreshTokenValue = uuidv4();
-    const jwtRefreshToken = jwt.sign(
-      { tokenId: refreshTokenValue },
-      process.env.JWT_REFRESH_SECRET,
-      { expiresIn: '7d' }
-    );
-
-    // Store refresh token in database
     await RefreshToken.create({
       token: refreshTokenValue,
       userId: user._id,
       expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
     });
 
-    return { jwtAccessToken, jwtRefreshToken };
+    return { jwtAccessToken, refreshTokenValue };
   })();
 
   inflightCodes.set(code, promise);
@@ -188,7 +179,7 @@ async function googleCallback(req, res) {
     console.log('Google Callback - Redirect URI:', redirectUri);
     console.log('Google Callback - Code:', code.substring(0, 20) + '...');
 
-    const { jwtAccessToken, jwtRefreshToken } = await exchangeAndIssue(
+    const { jwtAccessToken, refreshTokenValue } = await exchangeAndIssue(
       code,
       redirectUri
     );
@@ -203,7 +194,7 @@ async function googleCallback(req, res) {
     };
 
     res.cookie('accessToken', jwtAccessToken, cookieOptions);
-    res.cookie('refreshToken', jwtRefreshToken, {
+    res.cookie('refreshToken', refreshTokenValue, {
       ...cookieOptions,
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
