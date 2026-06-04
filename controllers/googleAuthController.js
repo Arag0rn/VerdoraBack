@@ -15,6 +15,32 @@ const inflightCodes = new Map();
 const CODE_TTL_MS = 60 * 1000;
 
 /**
+ * Where to send the browser after the OAuth dance. Must be a single absolute
+ * URL with a protocol — redirecting to an undefined/relative/multi-value string
+ * yields ERR_INVALID_REDIRECT in the browser.
+ *
+ * FRONTEND_ORIGIN may hold a comma-separated list (it doubles as the CORS
+ * allow-list), so we split it, keep only valid http(s) origins, and prefer an
+ * https one (the deployed frontend) over http localhost.
+ */
+function frontendOrigin() {
+  const candidates = (process.env.FRONTEND_ORIGIN || '')
+    .split(',')
+    .map(o => o.trim().replace(/\/$/, ''))
+    .filter(o => /^https?:\/\//.test(o));
+
+  const chosen =
+    candidates.find(o => o.startsWith('https://')) || candidates[0];
+
+  if (chosen) return chosen;
+
+  console.warn(
+    'FRONTEND_ORIGIN is missing or invalid; falling back to http://localhost:5173'
+  );
+  return 'http://localhost:5173';
+}
+
+/**
  * Initiate Google OAuth flow
  */
 async function googleAuth(req, res) {
@@ -122,7 +148,7 @@ async function googleCallback(req, res) {
     const code = urlParams.get('code');
 
     if (!code) {
-      return res.redirect(`${process.env.FRONTEND_ORIGIN}?error=no_code`);
+      return res.redirect(`${frontendOrigin()}?error=no_code`);
     }
 
     const redirectUri = `${process.env.BASE_URL}/auth/google/callback`;
@@ -150,7 +176,7 @@ async function googleCallback(req, res) {
     });
 
     // Redirect to frontend
-    res.redirect(process.env.FRONTEND_ORIGIN);
+    res.redirect(frontendOrigin());
   } catch (err) {
     console.error('Google OAuth callback error:', err.message);
     if (err.response) {
@@ -159,7 +185,7 @@ async function googleCallback(req, res) {
         data: err.response.data,
       });
     }
-    res.redirect(`${process.env.FRONTEND_ORIGIN}?error=server_error`);
+    res.redirect(`${frontendOrigin()}?error=server_error`);
   }
 }
 
