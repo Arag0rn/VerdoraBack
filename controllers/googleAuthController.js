@@ -5,6 +5,16 @@ const User = require('../models/User');
 const RefreshToken = require('../models/RefreshToken');
 
 /**
+ * Authorization codes are single-use. Browsers/extensions sometimes hit the
+ * callback twice with the same code (prefetch, antivirus URL scan, double
+ * navigation), and the second exchange fails with `invalid_grant`. We dedupe
+ * by code so concurrent/repeat requests share one exchange instead of a second
+ * (failing) one. Entries are short-lived; a code is useless after ~10 min.
+ */
+const inflightCodes = new Map();
+const CODE_TTL_MS = 60 * 1000;
+
+/**
  * Initiate Google OAuth flow
  */
 async function googleAuth(req, res) {
@@ -29,23 +39,16 @@ async function googleAuth(req, res) {
 }
 
 /**
- * Google OAuth callback handler
+ * Exchange the authorization code for Google tokens and issue our JWT pair.
+ * Deduped by code: repeat/concurrent callbacks with the same code reuse the
+ * same in-flight result instead of triggering a second (failing) exchange.
  */
-async function googleCallback(req, res) {
-  try {
-    const fullUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
-    const urlObj = new URL(fullUrl);
-    const urlParams = new URLSearchParams(urlObj.search);
-    const code = urlParams.get('code');
+function exchangeAndIssue(code, redirectUri) {
+  if (inflightCodes.has(code)) {
+    return inflightCodes.get(code);
+  }
 
-    if (!code) {
-      return res.redirect(`${process.env.FRONTEND_ORIGIN}?error=no_code`);
-    }
-
-    const redirectUri = `${process.env.BASE_URL}/auth/google/callback`;
-    console.log('Google Callback - Redirect URI:', redirectUri);
-    console.log('Google Callback - Code:', code.substring(0, 20) + '...');
-
+  const promise = (async () => {
     // Exchange code for token
     const tokenData = await axios.post(`https://oauth2.googleapis.com/token`, {
       client_id: process.env.GOOGLE_CLIENT_ID,
@@ -99,6 +102,37 @@ async function googleCallback(req, res) {
       userId: user._id,
       expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
     });
+
+    return { jwtAccessToken, jwtRefreshToken };
+  })();
+
+  inflightCodes.set(code, promise);
+  setTimeout(() => inflightCodes.delete(code), CODE_TTL_MS).unref?.();
+  return promise;
+}
+
+/**
+ * Google OAuth callback handler
+ */
+async function googleCallback(req, res) {
+  try {
+    const fullUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
+    const urlObj = new URL(fullUrl);
+    const urlParams = new URLSearchParams(urlObj.search);
+    const code = urlParams.get('code');
+
+    if (!code) {
+      return res.redirect(`${process.env.FRONTEND_ORIGIN}?error=no_code`);
+    }
+
+    const redirectUri = `${process.env.BASE_URL}/auth/google/callback`;
+    console.log('Google Callback - Redirect URI:', redirectUri);
+    console.log('Google Callback - Code:', code.substring(0, 20) + '...');
+
+    const { jwtAccessToken, jwtRefreshToken } = await exchangeAndIssue(
+      code,
+      redirectUri
+    );
 
     // Set cookies
     const isProduction = process.env.NODE_ENV === 'production';
